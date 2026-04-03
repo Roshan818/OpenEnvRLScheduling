@@ -1,0 +1,9 @@
+name: factory_env
+description: Smart factory scheduling environment
+
+tasks:
+ - name: easy
+ - name: medium
+ - name: hard
+
+entry_point: factory_env.env:FactoryEnv
