@@ -112,7 +112,6 @@ class FactoryEnv(Environment[FactoryAction, FactoryObservation, FactoryState]):
             time=self.time,
             task=self.task,
             late_jobs=self.late_jobs,
-            step_count=self.time,
         )
 
     def _make_obs(self, reward, done: bool) -> FactoryObservation:

@@ -1,9 +1,42 @@
 name: factory_env
-description: Smart factory scheduling environment
-
-tasks:
- - name: easy
- - name: medium
- - name: hard
+version: "1.0.0"
+description: Smart factory scheduling environment — assign jobs to machines, handle breakdowns, maximise throughput within deadlines.
 
 entry_point: factory_env.env:FactoryEnv
+
+tasks:
+  - name: easy
+    description: 2 machines, 3 jobs, no failures, 20 steps
+  - name: medium
+    description: 4 machines, 7 jobs, 8% failure rate, 30 steps
+  - name: hard
+    description: 6 machines, 12 jobs, 15% failure rate, 40 steps
+
+action_space:
+  type: text
+  description: "assign_job <job_id> <machine_id> | repair <machine_id> | wait"
+
+observation_space:
+  type: object
+  fields:
+    - name: machines
+      type: list
+      description: List of machines with id, status (idle/busy/broken), current_job
+    - name: pending_jobs
+      type: list
+      description: List of jobs with id, remaining_time, deadline, priority
+    - name: completed_jobs
+      type: list
+      description: Jobs completed this episode
+    - name: time
+      type: int
+      description: Current timestep
+    - name: max_steps
+      type: int
+      description: Episode length
+    - name: done
+      type: bool
+      description: Whether the episode has ended
+    - name: reward
+      type: float
+      description: Reward from the last action
