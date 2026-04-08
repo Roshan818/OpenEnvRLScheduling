@@ -1,15 +1,19 @@
 """
-OpenEnv HTTP Server — Smart Factory Scheduling
-Routes: GET /  GET /health  POST /reset  POST /step  GET /state  GET /schema
+Combined Server — Smart Factory Scheduling
+- Root /         → Gradio interactive UI (humans)
+- /health        → {"status": "healthy"}
+- /reset /step /state /schema → OpenEnv API (automated judges)
 """
 import os
-from fastapi.responses import JSONResponse
+import gradio as gr
 from openenv.core import create_app
 from factory_env.env import FactoryEnv
 from factory_env.models import FactoryAction, FactoryObservation
+from app import build_ui
 
 TASK = os.getenv("FACTORY_TASK", "easy")
 
+# 1. OpenEnv FastAPI app — registers /health /reset /step /state /schema
 app = create_app(
     env=lambda: FactoryEnv(task=TASK, seed=42),
     action_cls=FactoryAction,
@@ -17,16 +21,8 @@ app = create_app(
     env_name="factory_env",
 )
 
-
-@app.get("/")
-def root():
-    return JSONResponse({
-        "name": "factory_env",
-        "description": "Smart Factory Scheduling — OpenEnv RL Environment",
-        "tasks": ["easy", "medium", "hard"],
-        "endpoints": ["/health", "/reset", "/step", "/state", "/schema", "/docs"],
-    })
-
+# 2. Mount Gradio UI at root — API routes above take priority over this mount
+app = gr.mount_gradio_app(app, build_ui(), path="/")
 
 if __name__ == "__main__":
     import uvicorn
