@@ -28,6 +28,13 @@ class FactoryEnv(Environment[FactoryAction, FactoryObservation, FactoryState]):
         self.max_steps: int = self.config["max_steps"]
 
     def reset(self, seed: Optional[int] = None, episode_id: Optional[str] = None, **kwargs) -> FactoryObservation:
+        # Allow task to be overridden at reset time (e.g. from inference script)
+        task = kwargs.get("task", self.task)
+        if task != self.task and task in TASKS:
+            self.task = task
+            self.config = TASKS[task]
+            self.max_steps = self.config["max_steps"]
+
         use_seed = seed if seed is not None else self.seed
         self._rng = random.Random(use_seed)
         self.time = 0

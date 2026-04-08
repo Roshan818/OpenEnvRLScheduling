@@ -189,7 +189,7 @@ async def main() -> None:
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = await env.reset()
+        result = await env.reset(task=TASK_NAME)
         obs = result.observation
         last_reward = 0.0
 
