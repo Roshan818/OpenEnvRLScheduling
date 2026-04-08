@@ -40,7 +40,7 @@ API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1"
 MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 TASK_NAME: str = os.getenv("FACTORY_TASK", "easy")
 ENV_URL: str = os.getenv("ENV_URL", "http://localhost:7860")
-IMAGE_NAME: str = os.getenv("IMAGE_NAME", "")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 BENCHMARK: str = "factory_env"
 TEMPERATURE: float = 0.2
 MAX_TOKENS: int = 80
@@ -171,22 +171,22 @@ def score_from_state(state, task: str) -> float:
 async def main() -> None:
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    # Connect to environment — Docker image, direct URL, or localhost
-    if IMAGE_NAME:
-        print(f"[DEBUG] Spinning up Docker image: {IMAGE_NAME}", flush=True)
-        env = await FactoryEnvClient.from_docker_image(IMAGE_NAME)
-    else:
-        url = ENV_URL or "http://localhost:7860"
-        print(f"[DEBUG] Connecting to: {url}", flush=True)
-        env = FactoryEnvClient(base_url=url)
-        await env.connect()
-
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
 
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+
+    # Connect to environment — Docker image, direct URL, or localhost
+    if LOCAL_IMAGE_NAME:
+        print(f"[DEBUG] Spinning up Docker image: {LOCAL_IMAGE_NAME}", flush=True)
+        env = await FactoryEnvClient.from_docker_image(LOCAL_IMAGE_NAME)
+    else:
+        url = ENV_URL or "http://localhost:7860"
+        print(f"[DEBUG] Connecting to: {url}", flush=True)
+        env = FactoryEnvClient(base_url=url)
+        await env.connect()
 
     try:
         result = await env.reset(task=TASK_NAME)
