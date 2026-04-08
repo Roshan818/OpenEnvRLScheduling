@@ -1,3 +1,16 @@
+---
+title: Smart Factory Scheduling Environment
+emoji: 🏭
+colorFrom: blue
+colorTo: green
+sdk: docker
+tags:
+  - openenv
+  - reinforcement-learning
+  - scheduling
+pinned: false
+---
+
 # Smart Factory Scheduling Environment
 
 An [OpenEnv](https://github.com/openenv/openenv)-compliant RL environment simulating real-world industrial scheduling: assign jobs to machines, handle breakdowns, and maximise throughput within deadlines.
