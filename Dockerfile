@@ -20,4 +20,4 @@ ENV ENABLE_WEB_INTERFACE=1
 
 EXPOSE 7860
 
-CMD ["python", "server.py"]
+CMD ["python", "main.py"]
