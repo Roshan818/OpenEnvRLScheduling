@@ -1,16 +1,21 @@
 """
 Graders for Smart Factory Scheduling tasks.
-Called by the OpenEnv validator to score an episode.
 
-Each grader accepts either:
-  - an env object  (has .completed_jobs, .jobs, .time, .late_jobs attributes)
-  - a state dict   (has "completed_jobs", "pending_jobs", "time", "late_jobs" keys)
+Each grader is self-contained: when called with no arguments it creates a
+FactoryEnv, runs a deterministic heuristic episode, and returns a score
+strictly in (0, 1).
 
-Returns a float strictly in (0, 1).
+Alternatively, pass an env object or state dict from an already-run episode:
+    score_easy(env)       # env object with .completed_jobs, .jobs, .time …
+    score_easy(state)     # dict with "completed_jobs", "pending_jobs", "time" …
 """
 
+from __future__ import annotations
 
-def _compute(completed, on_time, total, late):
+
+# ── internal helpers ──────────────────────────────────────────────────────────
+
+def _compute(completed: int, on_time: int, total: int, late: int) -> float:
     if total == 0:
         return 0.001
     score = (
@@ -21,37 +26,79 @@ def _compute(completed, on_time, total, late):
     return round(max(0.001, min(0.999, score)), 4)
 
 
-def _score(state_or_env):
-    if isinstance(state_or_env, dict):
-        done = state_or_env.get("completed_jobs", []) or []
-        pending = state_or_env.get("pending_jobs", []) or []
-        late = state_or_env.get("late_jobs", 0) or 0
-        t = state_or_env.get("time", 0) or 0
+def _score_from(obj) -> float:
+    """Accept env object or state dict and return a score."""
+    if isinstance(obj, dict):
+        done_jobs = obj.get("completed_jobs", []) or []
+        pending   = obj.get("pending_jobs", []) or []
+        late      = obj.get("late_jobs", 0) or 0
+        t         = obj.get("time", 0) or 0
     else:
-        done = list(getattr(state_or_env, "completed_jobs", []) or [])
-        pending = list(getattr(state_or_env, "jobs", getattr(state_or_env, "pending_jobs", [])) or [])
-        late = getattr(state_or_env, "late_jobs", 0) or 0
-        t = getattr(state_or_env, "time", 0) or 0
+        done_jobs = list(getattr(obj, "completed_jobs", []) or [])
+        pending   = list(
+            getattr(obj, "jobs", getattr(obj, "pending_jobs", []))
+        ) or []
+        late = getattr(obj, "late_jobs", 0) or 0
+        t    = getattr(obj, "time", 0) or 0
 
-    completed = len(done)
-    total = completed + len(pending)
-    on_time = sum(
-        1 for j in done
-        if (j.get("deadline", 0) if isinstance(j, dict) else getattr(j, "deadline", 0)) >= t
+    completed = len(done_jobs)
+    total     = completed + len(pending)
+    on_time   = sum(
+        1 for j in done_jobs
+        if (j.get("deadline", 0) if isinstance(j, dict)
+            else getattr(j, "deadline", 0)) >= t
     )
     return _compute(completed, on_time, total, late)
 
 
-def score_easy(state_or_env):
+def _heuristic_action(obs):
+    """Simple earliest-deadline-first heuristic."""
+    from factory_env.models import FactoryAction
+    for m in obs.machines:
+        if m.status == "broken":
+            return FactoryAction(action_type="repair", machine_id=m.id)
+    for j in sorted(obs.pending_jobs, key=lambda x: (x.deadline, -x.priority)):
+        for m in obs.machines:
+            if m.status == "idle":
+                return FactoryAction(
+                    action_type="assign_job", job_id=j.id, machine_id=m.id
+                )
+    return None  # wait
+
+
+def _run_episode(task: str, seed: int = 42) -> float:
+    """Run one full heuristic episode and return the graded score."""
+    from factory_env.env import FactoryEnv
+    from factory_env.models import FactoryAction
+
+    env = FactoryEnv(task=task, seed=seed)
+    obs = env.reset()
+    for _ in range(obs.max_steps):
+        if obs.done:
+            break
+        action = _heuristic_action(obs) or FactoryAction(action_type="wait")
+        obs = env.step(action)
+    return _score_from(env)
+
+
+# ── public graders ────────────────────────────────────────────────────────────
+
+def score_easy(state_or_env=None) -> float:
     """Grade an easy-task episode (2 machines, 3 jobs, no failures)."""
-    return _score(state_or_env)
+    if state_or_env is not None:
+        return _score_from(state_or_env)
+    return _run_episode("easy")
 
 
-def score_medium(state_or_env):
+def score_medium(state_or_env=None) -> float:
     """Grade a medium-task episode (4 machines, 7 jobs, 8% failures)."""
-    return _score(state_or_env)
+    if state_or_env is not None:
+        return _score_from(state_or_env)
+    return _run_episode("medium")
 
 
-def score_hard(state_or_env):
+def score_hard(state_or_env=None) -> float:
     """Grade a hard-task episode (6 machines, 12 jobs, 15% failures)."""
-    return _score(state_or_env)
+    if state_or_env is not None:
+        return _score_from(state_or_env)
+    return _run_episode("hard")
