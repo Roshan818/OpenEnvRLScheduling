@@ -7,10 +7,13 @@ entry_point: factory_env.env:FactoryEnv
 tasks:
   - name: easy
     description: 2 machines, 3 jobs, no failures, 20 steps
+    grader: factory_env.grader:score_episode
   - name: medium
     description: 4 machines, 7 jobs, 8% failure rate, 30 steps
+    grader: factory_env.grader:score_episode
   - name: hard
     description: 6 machines, 12 jobs, 15% failure rate, 40 steps
+    grader: factory_env.grader:score_episode
 
 action_space:
   type: text

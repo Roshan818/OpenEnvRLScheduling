@@ -51,7 +51,7 @@ An [OpenEnv](https://github.com/openenv/openenv)-compliant RL environment simula
 
 | Task | Machines | Jobs | Failure Rate | Max Steps | Baseline Score |
 |------|----------|------|-------------|-----------|----------------|
-| easy | 2 | 3 | 0% | 20 | 1.000 |
+| easy | 2 | 3 | 0% | 20 | ~0.999 |
 | medium | 4 | 7 | 8% | 30 | ~0.557 |
 | hard | 6 | 12 | 15% | 40 | ~0.457 |
 
@@ -97,7 +97,7 @@ docker run -e OPENAI_API_KEY=<key> -e FACTORY_TASK=easy -p 7860:7860 factory-env
 
 | Task | Score | Steps |
 |------|-------|-------|
-| easy | 1.000 | 4 |
+| easy | ~0.999 | 4 |
 | medium | ~0.529 | 12 |
 | hard | ~0.533 | 34 |
 
