@@ -31,11 +31,7 @@ from factory_env.grader import compute_score
 from factory_env.models import FactoryAction
 
 # ── Configuration ────────────────────────────────────────────────────────────
-API_KEY: Optional[str] = (
-    os.getenv("HF_TOKEN")
-    or os.getenv("OPENAI_API_KEY")
-    or os.getenv("API_KEY")
-)
+HF_TOKEN = os.getenv("HF_TOKEN")
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 TASK_NAME: str = os.getenv("FACTORY_TASK", "easy")
@@ -66,7 +62,7 @@ def log_step(
     step: int, action: str, reward: float, done: bool, error: Optional[str]
 ) -> None:
     print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} "
+        f"[STEP] step={step} action={action.replace(' ', '_')} reward={reward:.2f} "
         f"done={str(done).lower()} error={error or 'null'}",
         flush=True,
     )
@@ -169,7 +165,7 @@ def score_from_state(state, task: str) -> float:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 async def main() -> None:
-    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
     rewards: List[float] = []
     steps_taken = 0
