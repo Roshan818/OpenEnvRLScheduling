@@ -221,26 +221,30 @@ async def run_task(env_client: FactoryEnvClient,
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+async def _make_client() -> FactoryEnvClient:
+    """Create and connect a fresh client for one task episode."""
+    if IMAGE_NAME:
+        print(f"[DEBUG] Spinning up Docker image: {IMAGE_NAME}", flush=True)
+        return await FactoryEnvClient.from_docker_image(IMAGE_NAME)
+    url = ENV_URL or "http://localhost:7860"
+    print(f"[DEBUG] Connecting to: {url}", flush=True)
+    client = FactoryEnvClient(base_url=url)
+    await client.connect()
+    return client
+
+
 async def main() -> None:
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    if IMAGE_NAME:
-        print(f"[DEBUG] Spinning up Docker image: {IMAGE_NAME}", flush=True)
-        env_client = await FactoryEnvClient.from_docker_image(IMAGE_NAME)
-    else:
-        url = ENV_URL or "http://localhost:7860"
-        print(f"[DEBUG] Connecting to: {url}", flush=True)
-        env_client = FactoryEnvClient(base_url=url)
-        await env_client.connect()
-
-    try:
-        for task in TASKS:
-            await run_task(env_client, llm_client, task)
-    finally:
+    for task in TASKS:
+        env_client = await _make_client()
         try:
-            await env_client.close()
-        except Exception as exc:
-            print(f"[DEBUG] env.close() error: {exc}", flush=True)
+            await run_task(env_client, llm_client, task)
+        finally:
+            try:
+                await env_client.close()
+            except Exception as exc:
+                print(f"[DEBUG] env.close() error: {exc}", flush=True)
 
 
 if __name__ == "__main__":
