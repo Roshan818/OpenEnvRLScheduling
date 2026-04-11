@@ -1,14 +1,13 @@
 """
 Inference Script — Smart Factory Scheduling Environment
 =======================================================
-Runs an LLM agent against the factory_env server for all 3 tasks
+Runs an LLM agent against a running factory_env server for all 3 tasks
 (easy, medium, hard) and emits structured stdout logs.
 
 Environment variables:
   HF_TOKEN        HuggingFace / API key  (no default — required)
   API_BASE_URL    LLM endpoint           (default: HF router)
   MODEL_NAME      Model identifier       (default: Qwen/Qwen2.5-72B-Instruct)
-  IMAGE_NAME      Docker image name — if set, spins up a container
   ENV_URL         Server URL             (default: http://localhost:7860)
   FACTORY_TASK    Run a single task: easy | medium | hard  (default: run all 3)
 
@@ -19,27 +18,23 @@ STDOUT FORMAT  (one [START] / N [STEP] / one [END] per task):
 """
 
 import asyncio
+import json
 import os
 import textwrap
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-from factory_env.client import FactoryEnvClient
-from factory_env.grader import compute_score
-from factory_env.models import FactoryAction
-
 # ── Configuration ────────────────────────────────────────────────────────────
-HF_TOKEN = os.getenv("HF_TOKEN")
-API_KEY   = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME: str   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
-IMAGE_NAME        = os.getenv("IMAGE_NAME") or os.getenv("LOCAL_IMAGE_NAME")
-ENV_URL: str      = os.getenv("ENV_URL", "http://localhost:7860")
-BENCHMARK: str    = "factory_env"
-TEMPERATURE: float        = 0.2
-MAX_TOKENS: int           = 80
-SUCCESS_SCORE_THRESHOLD   = 0.5
+HF_TOKEN     = os.getenv("HF_TOKEN")
+API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
+ENV_URL      = os.getenv("ENV_URL", "http://localhost:7860")
+BENCHMARK    = "factory_env"
+TEMPERATURE  = 0.2
+MAX_TOKENS   = 80
+SUCCESS_SCORE_THRESHOLD = 0.5
 
 # Run a single task if FACTORY_TASK is set, otherwise run all three
 _single = os.getenv("FACTORY_TASK", "").strip()
@@ -57,15 +52,15 @@ SYSTEM_PROMPT = textwrap.dedent("""
 
 
 # ── Log helpers ───────────────────────────────────────────────────────────────
-def log_start(task: str, env: str, model: str) -> None:
-    print(f"[START] task={task} env={env} model={model}", flush=True)
+def log_start(task: str) -> None:
+    print(f"[START] task={task} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
 
 def log_step(step: int, action: str, reward: float, done: bool,
              error: Optional[str]) -> None:
     print(
-        f"[STEP] step={step} action={action.replace(' ', '_')} reward={reward:.2f} "
-        f"done={str(done).lower()} error={error or 'null'}",
+        f"[STEP] step={step} action={action.replace(' ', '_')} "
+        f"reward={reward:.2f} done={str(done).lower()} error={error or 'null'}",
         flush=True,
     )
 
@@ -79,28 +74,74 @@ def log_end(success: bool, steps: int, score: float,
     )
 
 
+# ── WebSocket client (raw, no openenv dependency) ────────────────────────────
+class EnvSession:
+    """Minimal async WebSocket session for the factory_env server."""
+
+    def __init__(self, base_url: str):
+        ws_url = base_url.rstrip("/").replace("http://", "ws://").replace("https://", "wss://")
+        self._ws_url = ws_url + "/ws"
+        self._ws = None
+
+    async def connect(self) -> None:
+        import websockets
+        self._ws = await websockets.connect(self._ws_url)
+
+    async def _send_recv(self, msg: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a message and return the response data dict."""
+        await self._ws.send(json.dumps(msg))
+        raw      = await self._ws.recv()
+        response = json.loads(raw)
+        if response.get("type") == "error":
+            err = response.get("data", {})
+            raise RuntimeError(f"Server error: {err.get('message', err)}")
+        return response.get("data", {})
+
+    async def reset(self, task: str) -> Dict[str, Any]:
+        """Returns the inner observation dict directly."""
+        data = await self._send_recv({"type": "reset", "data": {"task": task}})
+        # Response: {"observation": {...}, "reward": null, "done": false}
+        # Extract inner observation so callers get machines/pending_jobs/etc. directly
+        return data.get("observation", data)
+
+    async def step(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """Returns {"observation": {...}, "reward": float, "done": bool}."""
+        return await self._send_recv({"type": "step", "data": action})
+
+    async def state(self) -> Dict[str, Any]:
+        """WSStateMessage has no data field — send without it."""
+        return await self._send_recv({"type": "state"})
+
+    async def close(self) -> None:
+        if self._ws is not None:
+            await self._ws.close()
+            self._ws = None
+
+
 # ── Prompt builder ────────────────────────────────────────────────────────────
-def build_prompt(step: int, obs, last_reward: float) -> str:
+def build_prompt(step: int, obs: Dict[str, Any], last_reward: float) -> str:
     machines = "\n".join(
-        f"  {m.id}: {m.status}" + (f" ({m.current_job})" if m.current_job else "")
-        for m in obs.machines
+        f"  {m['id']}: {m['status']}" + (f" ({m['current_job']})" if m.get("current_job") else "")
+        for m in obs.get("machines", [])
     )
     jobs = (
         "\n".join(
-            f"  {j.id}: remaining={j.remaining_time}, deadline={j.deadline},"
-            f" priority={j.priority}"
-            for j in obs.pending_jobs
+            f"  {j['id']}: remaining={j['remaining_time']}, deadline={j['deadline']},"
+            f" priority={j['priority']}"
+            for j in obs.get("pending_jobs", [])
         )
         or "  (none)"
     )
     return (
-        f"Step {step}/{obs.max_steps} | time={obs.time} | last_reward={last_reward:+.2f}\n"
+        f"Step {step}/{obs.get('max_steps', '?')} | time={obs.get('time', 0)} | "
+        f"last_reward={last_reward:+.2f}\n"
         f"Machines:\n{machines}\nPending Jobs:\n{jobs}\nAction:"
     )
 
 
 # ── LLM call ─────────────────────────────────────────────────────────────────
-def get_model_action(client: OpenAI, step: int, obs, last_reward: float) -> str:
+def get_model_action(client: OpenAI, step: int, obs: Dict[str, Any],
+                     last_reward: float) -> str:
     try:
         resp = client.chat.completions.create(
             model=MODEL_NAME,
@@ -120,92 +161,108 @@ def get_model_action(client: OpenAI, step: int, obs, last_reward: float) -> str:
 
 
 # ── Action parser + heuristic fallback ───────────────────────────────────────
-def parse_action(text: str) -> FactoryAction:
+def parse_action(text: str) -> Optional[Dict[str, Any]]:
     try:
         parts = text.strip().split()
         if parts[0] == "assign_job" and len(parts) == 3:
-            return FactoryAction(action_type="assign_job",
-                                 job_id=parts[1], machine_id=parts[2])
+            return {"action_type": "assign_job", "job_id": parts[1], "machine_id": parts[2]}
         if parts[0] == "repair" and len(parts) == 2:
-            return FactoryAction(action_type="repair", machine_id=parts[1])
+            return {"action_type": "repair", "machine_id": parts[1]}
     except Exception:
         pass
-    return FactoryAction(action_type="wait")
+    return None
 
 
-def heuristic_action(obs):
-    for m in obs.machines:
-        if m.status == "broken":
-            return FactoryAction(action_type="repair", machine_id=m.id), f"repair {m.id}"
-    for j in sorted(obs.pending_jobs, key=lambda x: (x.deadline, -x.priority)):
-        for m in obs.machines:
-            if m.status == "idle":
-                s = f"assign_job {j.id} {m.id}"
-                return FactoryAction(action_type="assign_job",
-                                     job_id=j.id, machine_id=m.id), s
-    return FactoryAction(action_type="wait"), "wait"
+def heuristic_action(obs: Dict[str, Any]):
+    machines = obs.get("machines", [])
+    jobs     = obs.get("pending_jobs", [])
+    for m in machines:
+        if m["status"] == "broken":
+            return {"action_type": "repair", "machine_id": m["id"]}, f"repair {m['id']}"
+    for j in sorted(jobs, key=lambda x: (x["deadline"], -x["priority"])):
+        for m in machines:
+            if m["status"] == "idle":
+                s = f"assign_job {j['id']} {m['id']}"
+                return {"action_type": "assign_job", "job_id": j["id"], "machine_id": m["id"]}, s
+    return {"action_type": "wait"}, "wait"
 
 
-# ── Score from final state ────────────────────────────────────────────────────
-def score_from_state(state, task: str) -> float:
-    completed_jobs = getattr(state, "completed_jobs", []) or []
-    pending_jobs   = getattr(state, "pending_jobs",   []) or []
-    late_jobs      = getattr(state, "late_jobs", 0) or 0
-    time           = getattr(state, "time",      0) or 0
+# ── Score helpers ─────────────────────────────────────────────────────────────
+def compute_score(completed: int, on_time: int, total: int, late: int) -> float:
+    if total == 0:
+        return 0.001
+    score = (
+        0.5 * (completed / total)
+        + 0.3 * (on_time / max(completed, 1))
+        + 0.2 * max(0.0, 1.0 - late / max(completed, 1))
+    )
+    return round(max(0.001, min(0.999, score)), 4)
+
+
+def score_from_state(state: Dict[str, Any], task: str) -> float:
+    completed_jobs = state.get("completed_jobs", []) or []
+    pending_jobs   = state.get("pending_jobs",   []) or []
+    late_jobs      = state.get("late_jobs", 0) or 0
+    t              = state.get("time", 0) or 0
     completed      = len(completed_jobs)
     total          = completed + len(pending_jobs)
     on_time = sum(
         1 for j in completed_jobs
-        if (j.get("deadline", 0) if isinstance(j, dict)
-            else j.deadline) >= time
+        if (j.get("deadline", 0) if isinstance(j, dict) else j.deadline) >= t
     )
-    return compute_score(completed, on_time, total, late_jobs, task)
+    return compute_score(completed, on_time, total, late_jobs)
 
 
 # ── Single-task episode ───────────────────────────────────────────────────────
-async def run_task(env_client: FactoryEnvClient,
-                   llm_client: OpenAI,
-                   task: str) -> None:
+async def run_task(env_url: str, llm_client: OpenAI, task: str) -> None:
     rewards: List[float] = []
     steps_taken = 0
     score       = 0.0
     success     = False
 
-    log_start(task=task, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task)
 
+    session = EnvSession(env_url)
     try:
-        result     = await env_client.reset(task=task)
-        obs        = result.observation
+        await session.connect()
+        obs         = await session.reset(task=task)
+        # obs is the inner observation dict (machines, pending_jobs, max_steps, …)
+        # "done" and "reward" are NOT in the inner obs — track them separately
+        done        = False
         last_reward = 0.0
+        max_steps   = obs.get("max_steps", 40)
 
-        for step in range(1, obs.max_steps + 1):
-            if result.done:
+        for step in range(1, max_steps + 1):
+            if done:
                 break
 
             action_text = get_model_action(llm_client, step, obs, last_reward)
             action      = parse_action(action_text)
 
-            if action.action_type == "wait" and (
-                obs.pending_jobs
-                or any(m.status == "broken" for m in obs.machines)
+            # Heuristic fallback when LLM returns wait but work remains
+            if action is None or (
+                action.get("action_type") == "wait"
+                and (obs.get("pending_jobs") or any(m["status"] == "broken"
+                     for m in obs.get("machines", [])))
             ):
                 action, action_text = heuristic_action(obs)
 
-            result      = await env_client.step(action)
-            obs         = result.observation
-            reward      = result.reward or 0.0
-            done        = result.done
+            result      = await session.step(action)
+            # step() returns {"observation": {...}, "reward": float, "done": bool}
+            obs         = result.get("observation", result)
+            reward      = result.get("reward") or 0.0
+            done        = result.get("done", False)
             rewards.append(reward)
             steps_taken = step
             last_reward = reward
 
-            log_step(step=step, action=action_text,
-                     reward=reward, done=done, error=None)
+            log_step(step=step, action=action_text, reward=reward,
+                     done=done, error=None)
             if done:
                 break
 
         try:
-            state = await env_client.state()
+            state = await session.state()
             score = score_from_state(state, task)
         except Exception as exc:
             print(f"[DEBUG] state() failed: {exc}", flush=True)
@@ -215,36 +272,24 @@ async def run_task(env_client: FactoryEnvClient,
 
         success = score >= SUCCESS_SCORE_THRESHOLD
 
+    except Exception as exc:
+        print(f"[DEBUG] run_task({task}) error: {exc}", flush=True)
     finally:
-        log_end(success=success, steps=steps_taken,
-                score=score, rewards=rewards)
+        try:
+            await session.close()
+        except Exception:
+            pass
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-async def _make_client() -> FactoryEnvClient:
-    """Create and connect a fresh client for one task episode."""
-    if IMAGE_NAME:
-        print(f"[DEBUG] Spinning up Docker image: {IMAGE_NAME}", flush=True)
-        return await FactoryEnvClient.from_docker_image(IMAGE_NAME)
-    url = ENV_URL or "http://localhost:7860"
-    print(f"[DEBUG] Connecting to: {url}", flush=True)
-    client = FactoryEnvClient(base_url=url)
-    await client.connect()
-    return client
-
-
 async def main() -> None:
+    url        = ENV_URL or "http://localhost:7860"
     llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    print(f"[DEBUG] Connecting to: {url}", flush=True)
 
     for task in TASKS:
-        env_client = await _make_client()
-        try:
-            await run_task(env_client, llm_client, task)
-        finally:
-            try:
-                await env_client.close()
-            except Exception as exc:
-                print(f"[DEBUG] env.close() error: {exc}", flush=True)
+        await run_task(url, llm_client, task)
 
 
 if __name__ == "__main__":
