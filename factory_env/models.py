@@ -1,6 +1,14 @@
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, Field
-from openenv.core import Action as BaseAction, Observation as BaseObservation, State as BaseState
+
+# Lazy openenv base classes — fall back to pydantic BaseModel when the
+# openenv.core import chain (which pulls in gradio/PIL) is unavailable.
+try:
+    from openenv.core import Action as BaseAction, Observation as BaseObservation, State as BaseState
+except Exception:
+    BaseAction = BaseModel       # type: ignore[assignment,misc]
+    BaseObservation = BaseModel  # type: ignore[assignment,misc]
+    BaseState = BaseModel        # type: ignore[assignment,misc]
 
 
 class Machine(BaseModel):
@@ -32,7 +40,10 @@ class FactoryAction(BaseAction):
 
 
 class FactoryObservation(BaseObservation):
-    """Inherits: done (bool), reward (float|None), metadata (dict)"""
+    """Inherits done/reward/metadata from openenv base when available;
+    defined here explicitly so the class works when falling back to BaseModel."""
+    done: bool = False
+    reward: Optional[float] = None
     machines: List[Machine] = Field(default_factory=list)
     pending_jobs: List[Job] = Field(default_factory=list)
     completed_jobs: List[Job] = Field(default_factory=list)

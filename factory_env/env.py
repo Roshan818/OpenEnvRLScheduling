@@ -1,13 +1,19 @@
 import random
 from typing import List, Optional
 
-from openenv.core import Environment
+# Lazy base-class: import openenv.core only when it's available.
+# This lets FactoryEnv be imported (e.g. by the grader) even in minimal
+# environments where openenv-core's gradio/PIL chain fails to load.
+try:
+    from openenv.core import Environment as _EnvBase
+except Exception:
+    _EnvBase = object  # type: ignore[assignment,misc]
 
 from factory_env.models import FactoryAction, FactoryObservation, FactoryState, Machine, Job
 from factory_env.tasks import TASKS
 
 
-class FactoryEnv(Environment[FactoryAction, FactoryObservation, FactoryState]):
+class FactoryEnv(_EnvBase):
     """Smart Factory Scheduling Environment — OpenEnv compliant."""
 
     SUPPORTS_CONCURRENT_SESSIONS = True
